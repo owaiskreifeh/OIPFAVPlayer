@@ -1,0 +1,23 @@
+[
+  "createApplicationManagerObject",
+  "createCSManager",
+  "createCapabilitiesObject",
+  "createChannelConfig",
+  "createConfigurationObject",
+  "createDownloadManagerObject",
+  "createDownloadTriggerObject",
+  "createDrmAgentObject",
+  "createGatewayInfoObject",
+  "createMdsfetcherObject",
+  "createMediaSynchroniser",
+  "createParentalControlManagerObject",
+  "createProprietaryFunctionProvider",
+  "createRecordingSchedulerObject",
+  "createReminderManagerObject",
+  "createSearchManagerObject",
+  "createVideoBroadcastObject",
+  "createVideoInputObject",
+  "createVideoMpegObject",
+  "debug",
+  "isObjectSupported"
+]
