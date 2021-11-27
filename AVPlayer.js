@@ -1,82 +1,44 @@
 function AVPlayer(src, laURL) {
-  this._src = src;
-  this._laURL = laURL;
+  self = this;
   this._mediaElement = AVPlayer.createPlayerObject();
   this._drmAgent = AVPlayer.createDrmAgent();
 
   // info
-  this._state = AVPlayer.PLAY_STATE_STOPPED;
-  this.duration = 0;
-  this.currentTime = 0;
+  this._state = AVPlayer.PLAY_STATE_EMPTY; // has nth yet
   this.buffered = {
     length: 0,
     start: function (index) {
       return 0;
     },
     end: function (index) {
-      return this.currentTime;
+      return self.currentTime;
     },
   };
-  this.volume = 1;
-  this.muted = false;
+  //   this.duration = 0;
+  //   this.currentTime = 0;
+  this._volume = 1;
+  this._volumeBeforeMute = 1;
+  this._muted = false;
+
   this.paused = false;
   this.ended = false;
   this.error = null;
-  this.readyState = 0;
+  //   this.readyState = 0;
 
   // events
-  this.onPlayStateChange = null;
-  log("AVPlayer: ", this._mediaElement);
-  this._mediaElement.onPlayStateChange = function (state) {
-    this._state = state;
-    this.duration = this._mediaElement.playTime / 1000;
-    this.currentTime = this._mediaElement.playPosition / 1000;
-    this.volume = this._mediaElement.getVolume();
-    this.muted = this._mediaElement.getMuted();
-    this.error = null;
-
-    if (this.onPlayStateChange) {
-      this.onPlayStateChange(state);
+  this.onPlayStateChange = null; // event callback
+  // @TODO: throttle this event to avoid too many events
+  this._mediaElement.onPlayStateChange = throttle(
+    this._handlePlayStateChange.bind(this), // function
+    100, // wait
+    {
+      // options
+      leading: true,
     }
-    switch (state) {
-      case AVPlayer.PLAY_STATE_STOPPED:
-        this.paused = true;
-        this.ended = true;
-        break;
-      case AVPlayer.PLAY_STATE_PLAYING:
-        this.readyState = 4;
-        this.paused = false;
-        this.ended = false;
-        break;
-      case AVPlayer.PLAY_STATE_PAUSED:
-        this.paused = true;
-        this.ended = false;
-        break;
-      case AVPlayer.PLAY_STATE_BUFFERING:
-        this.readyState = 3;
-        this.paused = false;
-        this.ended = false;
-        break;
-      case AVPlayer.PLAY_STATE_ERROR:
-        this.paused = true;
-        this.ended = false;
-        this.error = this._mediaElement.error;
-        break;
-      case AVPlayer.PLAY_STATE_FINISHED:
-        this.paused = true;
-        this.ended = true;
-        break;
-      default:
-        this.paused = true;
-        this.ended = false;
-        break;
-    }
-  };
-
+  );
   // methods
-
   this.getMediaElement = function () {
-    return this._mediaElement;
+    return self._mediaElement;
   };
 
   this._setProtectionData = function (licenseServerURL, callback) {
@@ -91,32 +53,64 @@ function AVPlayer(src, laURL) {
         resultMsg,
         resultCode
       ) {
-        this.drmMsgHandler(msgType, resultMsg, resultCode, callback);
+        self.drmMsgHandler(msgType, resultMsg, resultCode, callback.bind(self));
       };
     } catch (e) {
-      log("setProtectionData Error 1: " + e.message);
+      logger("setProtectionData Error 1: " + e.message);
     }
     try {
-      this._drmAgent.onDRMRightsError = drmRightsErrorHandler;
+      this._drmAgent.onDRMRightsError = this.drmRightsErrorHandler.bind(this);
     } catch (e) {
-      log("setProtectionData Error 2: " + e.message);
+      logger("setProtectionData Error 2: " + e.message);
     }
     try {
       this._drmAgent.sendDRMMessage(msgType, xmlLicenseAcquisition, DRMSysID);
     } catch (e) {
-      log("setProtectionData Error 3: " + e.message);
+      logger("setProtectionData Error 3: " + e.message);
     }
   };
 
   this.setSource = function (src) {
-    this._src = src;
+    // check if source is string, and if so, check if it starts with http
+    if (typeof src === "string") {
+      if (src.indexOf("http") === 0) {
+        this._src = src;
+        this._state = AVPlayer.PLAY_STATE_STOPPED;
+      } else {
+        throw new Error("Invalid source");
+      }
+    } else {
+      throw new Error("Source must be a string");
+    }
   };
 
   this.setLaURL = function (laURL) {
     this._laURL = laURL;
   };
 
+  // default
+  if (src) {
+    this.setSource(src);
+  }
+  if (laURL) {
+    this.setLaURL(laURL);
+  }
+
   this.load = function (autoPlay) {
+    var type = "application/dash+xml";
+    if (this._src.match(/mp4$/)) {
+      this._mediaElement.setAttribute("type", "video/mp4");
+    } else {
+      this._mediaElement.setAttribute("type", type);
+    }
+
+    this._mediaElement.onDRMRightsError = this.drmRightsErrorHandler.bind(this);
+    try {
+      this._mediaElement.data = url;
+    } catch (e) {
+      console.log(e.message);
+    }
+
     if (this._laURL) {
       this._setProtectionData(this._laURL, function () {
         this._mediaElement.setSource(this._src);
@@ -190,11 +184,91 @@ function AVPlayer(src, laURL) {
 
   this.destroy = function () {
     this.stop();
-    this._mediaElement.data = null;
-    this._setProtectionData(null, null);
+    this._mediaElement.data = '';
+    this._setProtectionData('', null);
   };
 }
 
+//#region setters and getters
+
+// src
+Object.defineProperty(AVPlayer.prototype, "src", {
+  get: function () {
+    return this._src;
+  },
+  set: function (src) {
+    this.setSource(src);
+  },
+});
+
+// currentTime
+Object.defineProperty(AVPlayer.prototype, "currentTime", {
+  get: function () {
+    return this._mediaElement.playPosition / 1000;
+  },
+  set: function (currentTime) {
+    this._mediaElement.seek(currentTime * 1000);
+  },
+});
+
+// duration
+Object.defineProperty(AVPlayer.prototype, "duration", {
+    get: function () {
+        return this._mediaElement.playTime / 1000;
+    },
+});
+
+
+// volume
+Object.defineProperty(AVPlayer.prototype, "volume", {
+  get: function () {
+    return this._volume;
+  },
+  set: function (volume) {
+    this._mediaElement.setVolume(volume * 100);
+    this._volume = volume;
+    if (!this._muted) {
+      this._volumeBeforeMute = volume;
+    }
+  },
+});
+
+// muted
+Object.defineProperty(AVPlayer.prototype, "muted", {
+  get: function () {
+    return this._muted;
+  },
+  set: function (muted) {
+    this._muted = muted;
+    this.volume = muted ? 0 : this._volumeBeforeMute;
+  },
+});
+
+// readyState
+Object.defineProperty(AVPlayer.prototype, "readyState", {
+  get: function () {
+    switch (this._state) {
+      case AVPlayer.PLAY_STATE_EMPTY:
+        return 0;
+      case AVPlayer.PLAY_STATE_CONNECTING:
+        return 1;
+      case AVPlayer.PLAY_STATE_BUFFERING:
+        return 3;
+      case AVPlayer.PLAY_STATE_STOPPED:
+      case AVPlayer.PLAY_STATE_PLAYING:
+      case AVPlayer.PLAY_STATE_PAUSED:
+      case AVPlayer.PLAY_STATE_FINISHED:
+        return 4;
+      default:
+        return -1;
+    }
+  },
+});
+
+//#endregion
+
+//#region constants
+AVPlayer.PLAY_STATE_EMPTY = -1;
 AVPlayer.PLAY_STATE_STOPPED = 0;
 AVPlayer.PLAY_STATE_PLAYING = 1;
 AVPlayer.PLAY_STATE_PAUSED = 2;
@@ -207,8 +281,12 @@ AVPlayer.CONTENT_TYPE_VIDEO = 0;
 AVPlayer.CONTENT_TYPE_AUDIO = 1;
 AVPlayer.CONTENT_TYPE_SUBTITLE = 2;
 
+//#endregion
+
 AVPlayer.getPlayStateStringFromCode = function (code) {
   switch (code) {
+    case AVPlayer.PLAY_STATE_EMPTY:
+      return "EMPTY";
     case AVPlayer.PLAY_STATE_STOPPED:
       return "STOPPED";
     case AVPlayer.PLAY_STATE_PLAYING:
@@ -228,8 +306,47 @@ AVPlayer.getPlayStateStringFromCode = function (code) {
   }
 };
 
+AVPlayer.prototype._handlePlayStateChange = function (state) {
+  this._state = state;
+  this.error = null;
+  if (this.onPlayStateChange) {
+    this.onPlayStateChange(state);
+  }
+  switch (state) {
+    case AVPlayer.PLAY_STATE_STOPPED:
+      this.paused = true;
+      this.ended = false;
+      break;
+    case AVPlayer.PLAY_STATE_PLAYING:
+      this.paused = false;
+      this.ended = false;
+      break;
+    case AVPlayer.PLAY_STATE_PAUSED:
+      this.paused = true;
+      this.ended = false;
+      break;
+    case AVPlayer.PLAY_STATE_BUFFERING:
+      this.paused = false;
+      this.ended = false;
+      break;
+    case AVPlayer.PLAY_STATE_ERROR:
+      this.paused = true;
+      this.ended = false;
+      this.error = this._mediaElement.error;
+      break;
+    case AVPlayer.PLAY_STATE_FINISHED:
+      this.paused = true;
+      this.ended = true;
+      break;
+    default:
+      this.paused = true;
+      this.ended = false;
+      break;
+  }
+};
+
 AVPlayer.createPlayerObject = function () {
-  if (window.oipfObjectFactory) {
+  if (false && window.oipfObjectFactory) {
     return oipfObjectFactory.createVideoMpegObject();
   } else {
     var playerElement = document.createElement("object");
@@ -238,8 +355,9 @@ AVPlayer.createPlayerObject = function () {
   }
 };
 
+//#region DRM
 AVPlayer.createDrmAgent = function () {
-  if (window.oipfObjectFactory) {
+  if (false && window.oipfObjectFactory) {
     return oipfObjectFactory.createDrmAgentObject();
   } else {
     var drmAgent = document.createElement("object");
@@ -249,16 +367,16 @@ AVPlayer.createDrmAgent = function () {
 };
 
 AVPlayer.generatePlayreadyRequestXML = function (laURL) {
-  var xml =
+  var xmlLicenceAcquisition =
     '<?xml version="1.0" encoding="utf-8"?>' +
-    "<PlayReadyRequest>" +
-    "<LicenseAcquisition>" +
+    '<PlayReadyInitiator xmlns="http://schemas.microsoft.com/DRM/2007/03/protocols/">' +
+    "<LicenseServerUriOverride>" +
     "<LA_URL>" +
     laURL +
     "</LA_URL>" +
-    "</LicenseAcquisition>" +
-    "</PlayReadyRequest>";
-  return xml;
+    "</LicenseServerUriOverride>" +
+    "</PlayReadyInitiator>";
+  return xmlLicenceAcquisition;
 };
 
 // DRM Agent Event Handlers
@@ -268,7 +386,7 @@ AVPlayer.prototype.drmMsgHandler = function (
   resultCode,
   callback
 ) {
-  log("msgID, resultMsg, resultCode: ", msgID, ",", resultMsg, ",", resultCode);
+  logger("msgID, resultMsg, resultCode: ", msgID, ",", resultMsg, ",", resultCode);
   var errorMessage = "";
   switch (resultCode) {
     case 0:
@@ -294,13 +412,14 @@ AVPlayer.prototype.drmMsgHandler = function (
   }
 
   if (resultCode > 0) {
-    log("ERROR: ", errorMessage);
+    logger("ERROR: ", errorMessage);
   }
 };
 
 AVPlayer.prototype.drmRightsErrorHandler = function (errorCode, errorMsg) {
+    logger("DRM: ", errorCode, ": ", errorMsg);
   var errorMessage = "";
-  switch (resultCode) {
+  switch (errorCode) {
     case 0:
       errorMessage = "DRM: No license error";
       break;
@@ -308,16 +427,15 @@ AVPlayer.prototype.drmRightsErrorHandler = function (errorCode, errorMsg) {
       errorMessage = "DRM: Invalid license error";
       break;
     case 2:
-      errorMessage = "license valid";
+      errorMessage = "license valid! OKAY";
       break;
   }
-  log("ERROR: ", errorMessage);
+  logger("ERROR: ", errorMessage);
 };
+//#endregion
 
-
-
-// utils
-function log() {
+//#region utils
+function logger() {
   if (window.console) {
     console.log.apply(console, arguments);
   }
@@ -341,33 +459,33 @@ function debounce(func, wait, immediate) {
 
 function throttle(func, wait, options) {
   var context, args, result;
-    var timeout = null;
-    var previous = 0;
-    if (!options) options = {};
-    var later = function() {
-        previous = options.leading === false ? 0 : Date.now();
+  var timeout = null;
+  var previous = 0;
+  if (!options) options = {};
+  var later = function () {
+    previous = options.leading === false ? 0 : Date.now();
+    timeout = null;
+    result = func.apply(context, args);
+    if (!timeout) context = args = null;
+  };
+  return function () {
+    var now = Date.now();
+    if (!previous && options.leading === false) previous = now;
+    var remaining = wait - (now - previous);
+    context = this;
+    args = arguments;
+    if (remaining <= 0 || remaining > wait) {
+      if (timeout) {
+        clearTimeout(timeout);
         timeout = null;
-        result = func.apply(context, args);
-        if (!timeout) context = args = null;
-        }
-    return function() {
-        var now = Date.now();
-        if (!previous && options.leading === false) previous = now;
-        var remaining = wait - (now - previous);
-        context = this;
-        args = arguments;
-        if (remaining <= 0 || remaining > wait) {
-            if (timeout) {
-                clearTimeout(timeout);
-                timeout = null;
-            }
-            previous = now;
-            result = func.apply(context, args);
-            if (!timeout) context = args = null;
-        } else if (!timeout && options.trailing !== false) {
-            timeout = setTimeout(later, remaining);
-        }
-        return result;
+      }
+      previous = now;
+      result = func.apply(context, args);
+      if (!timeout) context = args = null;
+    } else if (!timeout && options.trailing !== false) {
+      timeout = setTimeout(later, remaining);
     }
+    return result;
+  };
 }
-
+//#endregion
